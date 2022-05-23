@@ -99,13 +99,13 @@ vector<BoxPointType> cub_needrm;
 vector<PointVector> Nearest_Points;
 vector<double> extrinT(3, 0.0);
 vector<double> extrinR(9, 0.0);
-deque<double> time_buffer;
-deque<PointCloudXYZI::Ptr> lidar_buffer;
+deque<double> time_buffer;  //lidar time buff
+deque<PointCloudXYZI::Ptr> lidar_buffer;  //lidar plc buff
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 
-PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
-PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
-PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
+PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());  //地图点云
+PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());  //预处理的无畸变特征点
+PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());  //下采样
 PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());
 PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
@@ -125,9 +125,9 @@ V3D Lidar_T_wrt_IMU(Zero3d);
 M3D Lidar_R_wrt_IMU(Eye3d);
 
 /*** EKF inputs and output ***/
-MeasureGroup Measures;
+MeasureGroup Measures; //measures
 esekfom::esekf<state_ikfom, 12, input_ikfom> kf;
-state_ikfom state_point;
+state_ikfom state_point;  //ekf状态值
 vect3 pos_lid;
 
 nav_msgs::Path path;
@@ -135,8 +135,8 @@ nav_msgs::Odometry odomAftMapped;
 geometry_msgs::Quaternion geoQuat;
 geometry_msgs::PoseStamped msg_body_pose;
 
-shared_ptr<Preprocess> p_pre(new Preprocess());
-shared_ptr<ImuProcess> p_imu(new ImuProcess());
+shared_ptr<Preprocess> p_pre(new Preprocess());  //lidar数据的预处理
+shared_ptr<ImuProcess> p_imu(new ImuProcess());  //imu预处理
 
 void SigHandle(int sig)
 {
@@ -217,6 +217,7 @@ void RGBpointBodyLidarToIMU(PointType const *const pi, PointType *const po)
     po->intensity = pi->intensity;
 }
 
+//得到被剔除的点
 void points_cache_collect()
 {
     PointVector points_history;
@@ -236,6 +237,7 @@ void lasermap_fov_segment()
     // 机体坐标系转世界坐标系
     pointBodyToWorld(XAxisPoint_body, XAxisPoint_world);
     V3D pos_LiD = pos_lid;
+    //若未初始化 以当前雷达点为中心 长宽高200*200*200的局部地图
     if (!Localmap_Initialized)
     {
         for (int i = 0; i < 3; i++)
@@ -247,7 +249,7 @@ void lasermap_fov_segment()
         Localmap_Initialized = true;
         return;
     }
-
+    //当前雷达系中心到各个地图边缘的距离
     float dist_to_map_edge[3][2];
     bool need_move = false;
     for (int i = 0; i < 3; i++)
@@ -298,7 +300,7 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
     mtx_buffer.lock();
     scan_count++;
-    double preprocess_start_time = omp_get_wtime();
+    double preprocess_start_time = omp_get_wtime();  //返回时间  单位s
     if (msg->header.stamp.toSec() < last_timestamp_lidar)
     {
         ROS_ERROR("lidar loop back, clear buffer");
@@ -310,13 +312,14 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
     lidar_buffer.push_back(ptr);
     time_buffer.push_back(msg->header.stamp.toSec());
     last_timestamp_lidar = msg->header.stamp.toSec();
+    //转换处理时间
     s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
 
 // livox_ros_driver::CustomMsg点云数据处理回调
-double timediff_lidar_wrt_imu = 0.0;
+double timediff_lidar_wrt_imu = 0.0;  //livox use
 bool timediff_set_flg = false;
 void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
 {
@@ -704,9 +707,9 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         if (!point_selected_surf[i])
             continue;
 
-        VF(4)
-        pabcd;
+        VF(4) pabcd;
         point_selected_surf[i] = false;
+        //平面检测
         if (esti_plane(pabcd, points_near, 0.1f))
         {
             float pd2 = pabcd(0) * point_world.x + pabcd(1) * point_world.y + pabcd(2) * point_world.z + pabcd(3);
@@ -715,7 +718,7 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
             if (s > 0.9)
             {
                 point_selected_surf[i] = true;
-                normvec->points[i].x = pabcd(0);
+                normvec->points[i].x = pabcd(0);  //平面向量
                 normvec->points[i].y = pabcd(1);
                 normvec->points[i].z = pabcd(2);
                 normvec->points[i].intensity = pd2;
@@ -730,8 +733,8 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     {
         if (point_selected_surf[i])
         {
-            laserCloudOri->points[effct_feat_num] = feats_down_body->points[i];
-            corr_normvect->points[effct_feat_num] = normvec->points[i];
+            laserCloudOri->points[effct_feat_num] = feats_down_body->points[i];  //平面点
+            corr_normvect->points[effct_feat_num] = normvec->points[i];  //平面向量
             total_residual += res_last[i];
             effct_feat_num++;
         }
@@ -758,7 +761,7 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         V3D point_this_be(laser_p.x, laser_p.y, laser_p.z);
         M3D point_be_crossmat;
         point_be_crossmat << SKEW_SYM_MATRX(point_this_be);
-        V3D point_this = s.offset_R_L_I * point_this_be + s.offset_T_L_I;
+        V3D point_this = s.offset_R_L_I * point_this_be + s.offset_T_L_I;  //imu坐标系
         M3D point_crossmat;
         point_crossmat << SKEW_SYM_MATRX(point_this);
 
@@ -801,24 +804,24 @@ int main(int argc, char **argv)
     nh.param<string>("common/lid_topic", lid_topic, "/livox/lidar");
     nh.param<string>("common/imu_topic", imu_topic, "/livox/imu");
     nh.param<bool>("common/time_sync_en", time_sync_en, false);
-    nh.param<double>("filter_size_corner", filter_size_corner_min, 0.5);
-    nh.param<double>("filter_size_surf", filter_size_surf_min, 0.5);
-    nh.param<double>("filter_size_map", filter_size_map_min, 0.5);
-    nh.param<double>("cube_side_length", cube_len, 200);
-    nh.param<float>("mapping/det_range", DET_RANGE, 300.f);
-    nh.param<double>("mapping/fov_degree", fov_deg, 180);
+    nh.param<double>("filter_size_corner", filter_size_corner_min, 0.5);  // VoxelGrid降采样时的体素大小
+    nh.param<double>("filter_size_surf", filter_size_surf_min, 0.5);// VoxelGrid降采样时的体素大小
+    nh.param<double>("filter_size_map", filter_size_map_min, 0.5);// VoxelGrid降采样时的体素大小
+    nh.param<double>("cube_side_length", cube_len, 200);  // 地图的局部区域的长度（FastLio2论文中有解释）
+    nh.param<float>("mapping/det_range", DET_RANGE, 300.f);  // 激光雷达的最大探测范围
+    nh.param<double>("mapping/fov_degree", fov_deg, 180);  // 激光雷达的视场角
     nh.param<double>("mapping/gyr_cov", gyr_cov, 0.1);
     nh.param<double>("mapping/acc_cov", acc_cov, 0.1);
     nh.param<double>("mapping/b_gyr_cov", b_gyr_cov, 0.0001);
     nh.param<double>("mapping/b_acc_cov", b_acc_cov, 0.0001);
-    nh.param<double>("preprocess/blind", p_pre->blind, 0.01);
+    nh.param<double>("preprocess/blind", p_pre->blind, 0.01);  // 最小距离阈值，即过滤掉0～blind范围内的点云
     nh.param<int>("preprocess/lidar_type", p_pre->lidar_type, AVIA);
     nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
     nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
-    nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
-    nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
+    nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);  // 采样间隔，即每隔point_filter_num个点取1个点
+    nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);  // 是否提取特征点（FAST_LIO2默认不进行特征点提取）
     nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
-    nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
+    nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);   // 是否进行在线的外参估计
     nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
@@ -829,6 +832,26 @@ int main(int argc, char **argv)
     path.header.frame_id = "camera_init";
 
     /*** variables definition ***/
+
+     /*** variables definition ***/
+    /** 变量定义
+     * effect_feat_num          （后面的代码中没有用到该变量）
+     * frame_num                雷达总帧数
+     * deltaT                   （后面的代码中没有用到该变量）
+     * deltaR                   （后面的代码中没有用到该变量）
+     * aver_time_consu          每帧平均的处理总时间
+     * aver_time_icp            每帧中icp的平均时间
+     * aver_time_match          每帧中匹配的平均时间
+     * aver_time_incre          每帧中ikd-tree增量处理的平均时间
+     * aver_time_solve          每帧中计算的平均时间
+     * aver_time_const_H_time   每帧中计算的平均时间（当H恒定时）
+     * flg_EKF_converged        （后面的代码中没有用到该变量）
+     * EKF_stop_flg             （后面的代码中没有用到该变量）
+     * FOV_DEG                  （后面的代码中没有用到该变量）
+     * HALF_FOV_COS             （后面的代码中没有用到该变量）
+     * _featsArray              （后面的代码中没有用到该变量）
+     */
+
     int effect_feat_num = 0, frame_num = 0;
     double deltaT, deltaR, aver_time_consu = 0, aver_time_icp = 0, aver_time_match = 0, aver_time_incre = 0, aver_time_solve = 0, aver_time_const_H_time = 0;
     bool flg_EKF_converged, EKF_stop_flg = 0;
@@ -837,15 +860,16 @@ int main(int argc, char **argv)
     HALF_FOV_COS = cos((FOV_DEG)*0.5 * PI_M / 180.0);
 
     _featsArray.reset(new PointCloudXYZI());
-
+ // 将数组point_selected_surf内元素的值全部设为true，数组point_selected_surf用于选择平面点
     memset(point_selected_surf, true, sizeof(point_selected_surf));
+    // 将数组res_last内元素的值全部设置为-1000.0f，
     memset(res_last, -1000.0f, sizeof(res_last));
     downSizeFilterSurf.setLeafSize(filter_size_surf_min, filter_size_surf_min, filter_size_surf_min);
     downSizeFilterMap.setLeafSize(filter_size_map_min, filter_size_map_min, filter_size_map_min);
     memset(point_selected_surf, true, sizeof(point_selected_surf));
     memset(res_last, -1000.0f, sizeof(res_last));
 
-    Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);
+    Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);  //liader==>>imu
     Lidar_R_wrt_IMU << MAT_FROM_ARRAY(extrinR);
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
     p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
@@ -911,6 +935,7 @@ int main(int argc, char **argv)
 
             p_imu->Process(Measures, kf, feats_undistort); // IMU预处理，其中包含了点云畸变处理
             state_point = kf.get_x();
+            //世界坐标系下的雷达坐标
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
 
             if (feats_undistort->empty() || (feats_undistort == NULL))
