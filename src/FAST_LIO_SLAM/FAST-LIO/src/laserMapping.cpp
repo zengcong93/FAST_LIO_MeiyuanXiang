@@ -690,6 +690,7 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         VF(4)
         pabcd;
         point_selected_surf[i] = false;
+        //提取法向量
         if (esti_plane(pabcd, points_near, 0.1f))
         {
             float pd2 = pabcd(0) * point_world.x + pabcd(1) * point_world.y + pabcd(2) * point_world.z + pabcd(3);
@@ -761,29 +762,29 @@ int main(int argc, char **argv)
     ros::NodeHandle nh;
 
     // 读取配置参数
-    nh.param<bool>("publish/scan_publish_en", scan_pub_en, 1);
-    nh.param<bool>("publish/dense_publish_en", dense_pub_en, 0);
-    nh.param<bool>("publish/scan_bodyframe_pub_en", scan_body_pub_en, 1);
-    nh.param<int>("max_iteration", NUM_MAX_ITERATIONS, 4);
+    nh.param<bool>("publish/scan_publish_en", scan_pub_en, 1);  //是否发布当前扫描点
+    nh.param<bool>("publish/dense_publish_en", dense_pub_en, 0);  //// 是否发布经过运动畸变校正注册到IMU坐标系的点云的topic
+    nh.param<bool>("publish/scan_bodyframe_pub_en", scan_body_pub_en, 1);// 是否发布经过运动畸变校正注册到IMU坐标系的点云的topic，需要该变量和上一个变量同时为true才发布
+    nh.param<int>("max_iteration", NUM_MAX_ITERATIONS, 4);  // 卡尔曼滤波的最大迭代次数
     nh.param<string>("map_file_path", map_file_path, "");
-    nh.param<string>("common/lid_topic", lid_topic, "/livox/lidar");
-    nh.param<string>("common/imu_topic", imu_topic, "/livox/imu");
-    nh.param<bool>("common/time_sync_en", time_sync_en, false);
-    nh.param<double>("filter_size_corner", filter_size_corner_min, 0.5);
-    nh.param<double>("filter_size_surf", filter_size_surf_min, 0.5);
-    nh.param<double>("filter_size_map", filter_size_map_min, 0.5);
-    nh.param<double>("cube_side_length", cube_len, 200);
-    nh.param<float>("mapping/det_range", DET_RANGE, 300.f);
-    nh.param<double>("mapping/fov_degree", fov_deg, 180);
+    nh.param<string>("common/lid_topic", lid_topic, "/livox/lidar");  // 激光雷达点云topic名称
+    nh.param<string>("common/imu_topic", imu_topic, "/livox/imu");  // IMU的topic名称
+    nh.param<bool>("common/time_sync_en", time_sync_en, false);  // 是否需要时间同步，只有当外部未进行时间同步时设为true
+    nh.param<double>("filter_size_corner", filter_size_corner_min, 0.5);  // VoxelGrid降采样时的体素大小
+    nh.param<double>("filter_size_surf", filter_size_surf_min, 0.5);  // VoxelGrid降采样时的体素大小
+    nh.param<double>("filter_size_map", filter_size_map_min, 0.5);  // VoxelGrid降采样时的体素大小
+    nh.param<double>("cube_side_length", cube_len, 200);  // 地图的局部区域的长度（FastLio2论文中有解释）
+    nh.param<float>("mapping/det_range", DET_RANGE, 300.f);  // 激光雷达的最大探测范围
+    nh.param<double>("mapping/fov_degree", fov_deg, 180);  // 激光雷达的视场角
     nh.param<double>("mapping/gyr_cov", gyr_cov, 0.1);
     nh.param<double>("mapping/acc_cov", acc_cov, 0.1);
     nh.param<double>("mapping/b_gyr_cov", b_gyr_cov, 0.0001);
     nh.param<double>("mapping/b_acc_cov", b_acc_cov, 0.0001);
-    nh.param<double>("preprocess/blind", p_pre->blind, 0.01);
+    nh.param<double>("preprocess/blind", p_pre->blind, 0.01);  // 最小距离阈值，即过滤掉0～blind范围内的点云
     nh.param<int>("preprocess/lidar_type", p_pre->lidar_type, AVIA);
-    nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
-    nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
-    nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, 0);
+    nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);   // 激光雷达扫描的线数（livox avia为6线）
+    nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);  // 采样间隔，即每隔point_filter_num个点取1个点
+    nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, 0);// 是否提取特征点（FAST_LIO2默认不进行特征点提取）
     nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
     nh.param<bool>("pcd_save_enable", pcd_save_en, 0);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
@@ -794,6 +795,25 @@ int main(int argc, char **argv)
     path.header.frame_id = "camera_init";
 
     /*** variables definition ***/
+    /*** variables definition ***/
+    /** 变量定义
+     * effect_feat_num          （后面的代码中没有用到该变量）
+     * frame_num                雷达总帧数
+     * deltaT                   （后面的代码中没有用到该变量）
+     * deltaR                   （后面的代码中没有用到该变量）
+     * aver_time_consu          每帧平均的处理总时间
+     * aver_time_icp            每帧中icp的平均时间
+     * aver_time_match          每帧中匹配的平均时间
+     * aver_time_incre          每帧中ikd-tree增量处理的平均时间
+     * aver_time_solve          每帧中计算的平均时间
+     * aver_time_const_H_time   每帧中计算的平均时间（当H恒定时）
+     * flg_EKF_converged        （后面的代码中没有用到该变量）
+     * EKF_stop_flg             （后面的代码中没有用到该变量）
+     * FOV_DEG                  （后面的代码中没有用到该变量）
+     * HALF_FOV_COS             （后面的代码中没有用到该变量）
+     * _featsArray              （后面的代码中没有用到该变量）
+     */
+
     int effect_feat_num = 0, frame_num = 0;
     double deltaT, deltaR, aver_time_consu = 0, aver_time_icp = 0, aver_time_match = 0, aver_time_incre = 0, aver_time_solve = 0, aver_time_const_H_time = 0;
     bool flg_EKF_converged, EKF_stop_flg = 0;
@@ -820,6 +840,9 @@ int main(int argc, char **argv)
 
     double epsi[23] = {0.001};
     fill(epsi, epsi + 23, 0.001);
+    //接收特定于系统的模型及其差异
+    //作为一个维数变化的特征矩阵进行测量。
+    //通过一个函数（h_dyn_share_in）同时计算测量（z）、估计测量（h）、偏微分矩阵（h_x，h_v）和噪声协方差（R）。
     kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 
     /*** debug record ***/
@@ -943,6 +966,7 @@ int main(int argc, char **argv)
             /*** iterated state estimation ***/
             double t_update_start = omp_get_wtime();
             double solve_H_time = 0;
+            //迭代卡尔曼滤波更新
             kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             state_point = kf.get_x();
             euler_cur = SO3ToEuler(state_point.rot);

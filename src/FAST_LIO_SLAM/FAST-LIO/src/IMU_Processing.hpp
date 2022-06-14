@@ -187,6 +187,7 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
     mean_gyr += (cur_gyr - mean_gyr) / N;
 
     // cwiseProduct：输出相同位置的两个矩阵中各个系数的乘积所组成的矩阵
+    //https://blog.csdn.net/weixin_44479136/article/details/90510374
     cov_acc = cov_acc * (N - 1.0) / N + (cur_acc - mean_acc).cwiseProduct(cur_acc - mean_acc) * (N - 1.0) / (N * N); // 线加速度协方差
     cov_gyr = cov_gyr * (N - 1.0) / N + (cur_gyr - mean_gyr).cwiseProduct(cur_gyr - mean_gyr) * (N - 1.0) / (N * N); // 重力加速度协方差
 

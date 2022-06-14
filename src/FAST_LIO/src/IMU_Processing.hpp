@@ -175,7 +175,7 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
     mean_gyr << gyr_acc.x, gyr_acc.y, gyr_acc.z;
     first_lidar_time = meas.lidar_beg_time;
   }
-
+  //计算方差
   for (const auto &imu : meas.imu)
   {
     const auto &imu_acc = imu->linear_acceleration;
